@@ -1,4 +1,4 @@
-.PHONY: compile test checkout clean elisp
+.PHONY: compile test checkout clean elisp plugin
 ## erlbutt vendors rebar3; use that one unless told otherwise.
 ERLBUTT ?= $(HOME)/code/erlbutt
 REBAR   ?= $(ERLBUTT)/rebar3
@@ -25,6 +25,19 @@ checkout:
 	@mkdir -p _checkouts
 	ln -sfn $(ERLBUTT)/apps/ssb _checkouts/ssb
 	@echo "_checkouts/ssb -> $(ERLBUTT)/apps/ssb"
+
+## A drop-in copy of the plugin, built against $(ERLBUTT): _build/plugin/ssb_git/
+## holds ebin/, bin/ and elisp/, ready to copy to <data>/plugins/ on a node
+## running that erlbutt (it refuses to start on a different plugin API).
+PLUGIN_DIR = _build/plugin/ssb_git
+
+plugin: checkout compile
+	rm -rf $(PLUGIN_DIR)
+	mkdir -p $(PLUGIN_DIR)/elisp
+	cp -RL _build/default/lib/ssb_git/ebin $(PLUGIN_DIR)/ebin
+	cp -R bin $(PLUGIN_DIR)/bin
+	cp elisp/*.el $(PLUGIN_DIR)/elisp/
+	@echo "$(PLUGIN_DIR): copy it to <data>/plugins/ and restart the node"
 
 clean:
 	$(REBAR) clean

@@ -181,10 +181,22 @@ repository checked out beside it, `make prodpkg` (or `devpkg`, `rel`)
 puts it in `<release>/plugins/ssb_git/`, and the node starts it at boot.
 To leave it out, put `{plugins, []}.` in `<data>/ssb.cfg`.
 
-To add it to a node whose package did not include it, build it here and
-copy `_build/default/lib/ssb_git/ebin` and `bin/` to
-`<data>/plugins/ssb_git/`, then restart the node. A copy there also
-replaces one the package shipped, and survives upgrades.
+To add it to a node whose package did not include it, build a drop-in
+copy here against that node's erlbutt tree:
+
+```
+make plugin ERLBUTT=<path to the erlbutt tree>
+cp -R _build/plugin/ssb_git <data>/plugins/
+```
+
+then restart the node. `_build/plugin/ssb_git/` holds `ebin/`, `bin/` and
+`elisp/`. A copy in `<data>/plugins/` also replaces one the package
+shipped, and survives upgrades. `<data>` is the node's data directory;
+`bin/ssb eval 'plugin_loader:dirs().'` prints it, followed by the
+release's own plugins directory.
+
+A copy in `<data>` cannot find the release from where it sits, so its
+commands use `SSB_HOME`, or the release that `sbutt` on PATH belongs to.
 
 The first time the plugin starts, its views index every git message in
 the node's store, in the background, while the node carries on.
@@ -223,6 +235,7 @@ make checkout      # build against ~/code/erlbutt, or ERLBUTT=<path>
 make               # compile
 make test          # eunit
 make elisp         # byte-compile elisp/ as a check (needs maxbutt)
+make plugin        # a drop-in copy in _build/plugin/ssb_git/
 ```
 
 Without `make checkout`, rebar3 fetches erlbutt's `apps/ssb` from GitHub.
