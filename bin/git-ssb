@@ -1,0 +1,98 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Copyright (C) 2026 Commonwealth of Scuttlebutt
+#
+# bin/git-ssb — launcher for both ssb_git commands.  Installed twice on
+# PATH, under the two names git looks for:
+#
+#   ln -s ~/code/ssb_git/bin/git-ssb        ~/.local/bin/git-ssb
+#   ln -s ~/code/ssb_git/bin/git-remote-ssb ~/.local/bin/git-remote-ssb
+#
+# git-remote-ssb is a symlink to this file; the name it was run as is
+# what picks the command (ssb_git_cli).
+#
+# It finds two things:
+#
+#   the erlbutt release — SSB_HOME if set; else the release this file sits
+#     in, if it was installed into one (as <release>/plugins/ssb_git/bin/,
+#     where erlbutt's packages put it); else the release that `sbutt` on
+#     PATH belongs to.  Its ERTS and beams are used, so the client code is
+#     always the node's own version, and the node's data and identity are
+#     found the way the node finds them.
+#
+#   ssb_git's own beams — a checkout's _build, the plugin directory's
+#     ebin/, or the release's lib/.
+#
+# It runs erl directly rather than an escript: everything is compiled
+# into the app, so there is no escript to prebuild and no compiler needed.
+set -eu
+
+invoked=$(basename "$0")
+
+resolve() {
+    f=$1
+    while [ -L "$f" ]; do
+        link=$(readlink "$f")
+        case $link in
+            /*) f=$link ;;
+            *)  f=$(dirname "$f")/$link ;;
+        esac
+    done
+    echo "$f"
+}
+
+self=$(resolve "$0")
+root=$(cd "$(dirname "$self")/.." && pwd -P)
+
+die() { echo "$invoked: $*" >&2; exit 1; }
+
+# --- the erlbutt release ------------------------------------------------
+if [ -n "${SSB_HOME:-}" ]; then
+    :
+elif [ -d "$root/releases" ]; then
+    SSB_HOME=$root
+elif [ -d "$root/ebin" ] && [ -d "$root/../../releases" ]; then
+    SSB_HOME=$(cd "$root/../.." && pwd -P)
+elif sbutt=$(command -v sbutt 2>/dev/null); then
+    SSB_HOME=$(cd "$(dirname "$(resolve "$sbutt")")/.." && pwd -P)
+else
+    die "cannot find erlbutt: set SSB_HOME to the release directory, or put sbutt on PATH"
+fi
+export SSB_HOME
+
+# --- ssb_git's beams ----------------------------------------------------
+ebin=
+if [ -d "$root/_build/default/lib/ssb_git/ebin" ]; then
+    ebin=$root/_build/default/lib/ssb_git/ebin
+elif [ -d "$root/ebin" ]; then
+    ebin=$root/ebin
+else
+    for d in "$root"/lib/ssb_git-*/ebin; do
+        [ -d "$d" ] && ebin=$d
+    done
+fi
+[ -n "$ebin" ] || die "no ssb_git beams under $root (run make)"
+
+# --- the VM -------------------------------------------------------------
+# The release's bundled ERTS when it has one; a dev release
+# (include_erts=false) uses whatever erl is on PATH, as the node does.
+#
+# A release's erl boots bin/start.boot by default, which is the NODE.  relx
+# ships bin/no_dot_erlang.boot for exactly this: a plain VM, kernel and
+# stdlib from the release, nothing started.
+erl=
+for e in "$SSB_HOME"/erts-*/bin/erl; do
+    [ -x "$e" ] && erl=$e && break
+done
+if [ -z "$erl" ]; then
+    erl=$(command -v erl) || die "no bundled ERTS in $SSB_HOME and no erl on PATH"
+fi
+boot=
+if [ -f "$SSB_HOME/bin/no_dot_erlang.boot" ]; then
+    boot="-boot $SSB_HOME/bin/no_dot_erlang"
+fi
+
+# No -noinput: as git-remote-ssb, stdin is how git talks to us.
+# shellcheck disable=SC2086  # $boot is two words or none
+exec "$erl" $boot -noshell -pa "$ebin" -s ssb_git_cli start -extra "$invoked" "$@"

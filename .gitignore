@@ -1,0 +1,11 @@
+_build
+_checkouts
+*.beam
+*.crashdump
+erl_crash.dump
+.eunit
+.rebar3
+*~
+*#*#
+.DS_Store
+*.elc

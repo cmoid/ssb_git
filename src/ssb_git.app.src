@@ -1,0 +1,13 @@
+%% SPDX-License-Identifier: GPL-2.0-only
+{application, ssb_git,
+ [{description, "Git over SSB: an erlbutt plugin serving git-ssb repos, "
+                "pushes, issues and pull requests, plus the git-remote-ssb "
+                "helper and the git-ssb command.  The node never depends "
+                "on this app."},
+  {vsn, "0.1.0-dev"},
+  {registered, [ssb_git_sup, ssb_git_repos, ssb_git_refs, ssb_git_issues]},
+  {mod, {ssb_git_app, []}},
+  {applications, [kernel, stdlib, ssb]},
+  {env, []},
+  {licenses, ["GPL-2.0-only"]}
+ ]}.

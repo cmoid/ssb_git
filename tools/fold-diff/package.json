@@ -1,0 +1,10 @@
+{
+  "name": "ssb-git-fold-diff",
+  "private": true,
+  "description": "The reference side of tools/fold-diff: git-ssb's own ref fold.",
+  "license": "GPL-2.0-only",
+  "dependencies": {
+    "kvgraph": "0.1.0",
+    "ssb-git": "0.5.0"
+  }
+}
