@@ -90,6 +90,10 @@ outside ASCII are garbled in both directions.
 (require 'ssb-git)
 ```
 
+The manual is in Info: `C-h i`, then `ssb-git`. It ships in the
+plugin's `info/`, which `ssb-git.el` adds to Info's path when it loads;
+`make info_install` puts a copy in `~/.emacs.d/info` instead.
+
 The git it runs (a clone, a pull request checkout) finds `git-remote-ssb`
 in the plugin's `bin/`, beside the `elisp/` it was loaded from, whatever
 Emacs's PATH is; `ssb-git-bin-directory` overrides that.
@@ -203,8 +207,8 @@ make plugin ERLBUTT=<path to the erlbutt tree>
 cp -R _build/plugin/ssb_git <data>/plugins/
 ```
 
-then restart the node. `_build/plugin/ssb_git/` holds `ebin/`, `bin/` and
-`elisp/`. A copy in `<data>/plugins/` also replaces one the package
+then restart the node. `_build/plugin/ssb_git/` holds `ebin/`, `bin/`, `elisp/`
+and `info/`. A copy in `<data>/plugins/` also replaces one the package
 shipped, and survives upgrades. `<data>` is the node's data directory;
 `bin/ssb eval 'plugin_loader:dirs().'` prints it, followed by the
 release's own plugins directory.
@@ -248,6 +252,7 @@ make               # compile
 make test          # eunit
 make elisp         # byte-compile elisp/ as a check (needs maxbutt)
 make plugin        # a drop-in copy in _build/plugin/ssb_git/
+make info          # the Emacs manual, doc/ssb-git.info (needs makeinfo)
 ```
 
 Without `make checkout`, rebar3 fetches erlbutt's `apps/ssb` from GitHub.

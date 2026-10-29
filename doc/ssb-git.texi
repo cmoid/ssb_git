@@ -1,0 +1,576 @@
+\input texinfo   @c -*-texinfo-*-
+@c %**start of header
+@setfilename ssb-git.info
+@settitle ssb-git User Manual
+@c %**end of header
+
+@c SPDX-License-Identifier: GPL-2.0-only
+
+@copying
+This manual is for ssb-git, the Emacs front end of the ssb_git erlbutt
+plugin: git repositories, issues and pull requests on Secure Scuttlebutt.
+
+Copyright @copyright{} 2026 Commonwealth of Scuttlebutt.
+@end copying
+
+@titlepage
+@title ssb-git User Manual
+@subtitle Git repos, issues and pull requests on SSB, in Emacs
+@author Charles Moid
+@page
+@vskip 0pt plus 1filll
+@insertcopying
+@end titlepage
+
+@dircategory Emacs
+@direntry
+* ssb-git: (ssb-git).           Git repos, issues and pull requests on SSB.
+@end direntry
+
+@contents
+
+@node Top
+@top ssb-git
+
+@ifinfo
+ssb-git is the forge half of ssb_git, for Emacs: the repos your erlbutt
+node knows, a repo's branches and pushes, and its issues and pull
+requests.  Git itself is used as usual; @xref{Git on SSB}.
+@end ifinfo
+
+@menu
+* Introduction::
+* Setting Up::
+* Git on SSB::
+* Repos::
+* Issues and Pull Requests::
+* Composing::
+* Whose Word Counts::
+* Customization::
+* Key Index::
+* Command Index::
+* Variable Index::
+
+@detailmenu
+ --- The Detailed Node Listing ---
+
+Setting Up
+
+* Requirements::                What ssb-git runs on.
+* Loading::                     Adding it to your Emacs.
+* Finding git-remote-ssb::      PATH, and why Emacs may not have it.
+
+Repos
+
+* The Repos List::              Every repo the node knows.
+* A Repo::                      Branches, pushes, names.
+* Cloning::                     From a repo buffer.
+
+Issues and Pull Requests
+
+* Issue Lists::                 A repo's issues or pull requests.
+* An Issue::                    Its text, changes and comments.
+* Closing and Reopening::       Changing an issue's state.
+* Checking Out a Pull Request:: Its branch, in a clone of yours.
+
+@end detailmenu
+@end menu
+
+@node Introduction
+@chapter Introduction
+
+git-ssb put git repositories on Secure Scuttlebutt: a repo is a message,
+a push is a message naming the packs it stored as blobs, and issues,
+pull requests and comments are messages too.  ssb_git is an erlbutt
+plugin that speaks the same formats, so every repo published since 2016
+can be cloned, pushed to and discussed again.
+
+The plugin has two front ends.  Git is one: @command{git clone},
+@command{git fetch} and @command{git push} work on @code{ssb://} URLs.
+ssb-git is the other, for everything git has no word for: browsing the
+repos the node holds, reading a repo's pushes, and filing, reading,
+commenting on and closing issues and pull requests.
+
+ssb-git does not run git for you, beyond a clone and checking out a
+pull request.  Commit, branch and push however you already do; Emacs's
+built-in VC (@kbd{C-x v P} pushes) works on an @code{ssb://} remote like
+any other.
+
+@node Setting Up
+@chapter Setting Up
+
+@menu
+* Requirements::                What ssb-git runs on.
+* Loading::                     Adding it to your Emacs.
+* Finding git-remote-ssb::      PATH, and why Emacs may not have it.
+@end menu
+
+@node Requirements
+@section Requirements
+
+@itemize @bullet
+@item
+A running erlbutt node with the ssb_git plugin started.  erlbutt's
+packages ship it; @code{plugin_loader:list().} on the node says whether
+it started.
+
+@item
+maxbutt, set up and connected: ssb-git uses its Distel connection to the
+node (@code{ssb-node}), its feed view and its thread view.  The maxbutt
+must be recent enough to carry non-ASCII text correctly (its erlext
+UTF-8 fix, October 2026); with an older one, titles and comments outside
+ASCII are garbled in both directions.  @xref{Top,,, maxbutt, Maxbutt
+User Manual}.
+
+@item
+Optionally, @code{markdown-mode}, for compose buffers.  Without it they
+use @code{text-mode}.
+@end itemize
+
+@node Loading
+@section Loading
+
+The plugin carries its own elisp, so load it from the release it runs
+in, and the two always match:
+
+@lisp
+(add-to-list 'load-path "<release>/plugins/ssb_git/elisp")
+(require 'ssb-git)
+@end lisp
+
+@noindent
+@code{<release>} is the erlbutt release directory, such as
+@file{~/erlbutt-ssb}.  If you put ssb_git in the node's data directory
+instead, load it from @file{<data>/plugins/ssb_git/elisp}.
+
+Nothing needs starting: the first command connects through maxbutt.  If
+the node answers but the plugin does not, ssb-git says so: ``is the
+ssb_git plugin running in @var{node}?''.
+
+@node Finding git-remote-ssb
+@section Finding git-remote-ssb
+
+Git runs @command{git-remote-ssb} for an @code{ssb://} URL, looking for
+it on @env{PATH}.  On macOS an Emacs started from the Dock or Finder
+gets launchd's @env{PATH}, not your shell's, so a directory such as
+@file{~/.local/bin} is not on it, and a clone from Emacs fails with
+``git: 'remote-ssb' is not a git command''.
+
+ssb-git avoids this for the git it runs itself: it puts the plugin's
+@file{bin/}, beside the @file{elisp/} it was loaded from, first on
+@env{PATH}.  @xref{Customization}, @code{ssb-git-bin-directory}.
+
+Git run any other way inside Emacs (VC, @kbd{M-x shell}, @kbd{M-x
+compile}) does not go through ssb-git.  For that, add the directory
+holding your @command{git-remote-ssb} link to Emacs's own @env{PATH}:
+
+@lisp
+(let ((bin (expand-file-name "~/.local/bin")))
+  (setenv "PATH" (concat bin path-separator (getenv "PATH")))
+  (add-to-list 'exec-path bin))
+@end lisp
+
+@node Git on SSB
+@chapter Git on SSB
+
+This chapter is about the command line, which ssb-git leaves to git.
+
+A repo's URL is @code{ssb://} followed by its message id:
+
+@example
+git clone ssb://%n92DiQh7ietE+R+X/I403LQoyf2DtR3WQfCkDKlheQU=.sha256 git-ssb
+@end example
+
+Fetch and push go through the local erlbutt node, never the network
+directly.  A clone is read from the packs the node already holds; any it
+lacks are asked of its peers, and the fetch waits for them for a time.
+A push stores its pack on the node and publishes the update from your
+feed.
+
+Commands git has no word for are under @command{git ssb}:
+
+@table @code
+@item git ssb create @var{name} [--remote @var{remote}]
+Publish a new repo and print its URL; with @option{--remote}, also add
+it as a remote of the repository you are in.  Its branches arrive with
+the first push.
+
+@item git ssb name @var{name} [--remote @var{remote}]
+Rename the repo @var{remote} (by default @code{origin}) points at.  Only
+your own repos: a name for someone else's would not count
+(@pxref{Whose Word Counts}).
+
+@item git ssb repos [--mine | --author @var{feed}]
+List the repos the node knows.  A name in brackets is one someone other
+than the repo's author gave it.
+@end table
+
+A push closes the issues it fixes, as git-ssb's did: a commit it adds to
+the repo's @code{HEAD} branch whose message says, for example,
+@samp{fixes %@var{issue id}} closes that issue.  @xref{Whose Word
+Counts}.
+
+@node Repos
+@chapter Repos
+
+@menu
+* The Repos List::              Every repo the node knows.
+* A Repo::                      Branches, pushes, names.
+* Cloning::                     From a repo buffer.
+@end menu
+
+@node The Repos List
+@section The Repos List
+
+@deffn Command ssb-git-repos &optional mine
+List every git repo the node knows, most recently active first: the
+date of its last push (or of its creation), its name, its author, and
+its open issues and pull requests.  With a prefix argument, only the
+repos you created.
+@end deffn
+
+A repo's name is the one its author gave it.  A name shown dimmed is one
+someone else gave a repo its author never named; a repo with no name at
+all shows its short id.  @xref{Whose Word Counts}.
+
+The list is a @code{tabulated-list-mode} buffer: click a column header,
+or use @kbd{S}, to sort by it.
+
+@table @kbd
+@kindex RET @r{(repos list)}
+@item RET
+Open the repo at point (@code{ssb-git-open-repo}).
+@findex ssb-git-open-repo
+
+@kindex m @r{(repos list)}
+@item m
+Switch between all repos and only yours (@code{ssb-git-repos-toggle-mine}).
+@findex ssb-git-repos-toggle-mine
+
+@kindex g @r{(repos list)}
+@item g
+Refresh.
+@end table
+
+@node A Repo
+@section A Repo
+
+@deffn Command ssb-git-repo id
+Show repo @var{id}, a @code{git-repo} message id, with or without the
+@code{ssb://} prefix.  Also what @kbd{RET} opens from the repos list.
+@end deffn
+
+A repo buffer shows, from the top:
+
+@itemize @bullet
+@item
+its name and URL, who created it and when, and the repo it forks, if
+any;
+
+@item
+every name it has been given, when one differs from its current name,
+each with who gave it; names that are not its author's are marked
+``not counted'';
+
+@item
+its open issue and pull request counts;
+
+@item
+its branches, @samp{*} marking @code{HEAD}.  A branch named like
+@code{%@var{update id}/master} is a @dfn{conflict branch}: two people
+pushed to @code{master} concurrently, and this is the value that did
+not become the plain branch.  It is marked with the branch it competes
+for;
+
+@item
+its recent pushes, newest first: who pushed, the branches each moved
+(or deleted), and the commits each added.
+@end itemize
+
+@table @kbd
+@kindex i @r{(repo)}
+@item i
+List the repo's open issues (@code{ssb-git-issues}).
+@findex ssb-git-issues
+
+@kindex P @r{(repo)}
+@item P
+List its open pull requests (@code{ssb-git-pull-requests}).
+@findex ssb-git-pull-requests
+
+@kindex N @r{(repo)}
+@item N
+File a new issue (@code{ssb-git-new-issue}).  @xref{Composing}.
+@findex ssb-git-new-issue
+
+@kindex R @r{(repo)}
+@item R
+Open a pull request (@code{ssb-git-new-pull-request}).  @xref{Composing}.
+
+@kindex w @r{(repo)}
+@item w
+Copy the repo's @code{ssb://} URL (@code{ssb-git-copy-url}).
+@findex ssb-git-copy-url
+
+@kindex C @r{(repo)}
+@item C
+Clone the repo (@code{ssb-git-clone}).  @xref{Cloning}.
+
+@kindex RET @r{(repo)}
+@kindex t @r{(repo)}
+@item RET
+@itemx t
+Open the push at point as a thread in maxbutt's thread view, to read or
+reply to the discussion of it (@code{ssb-show-thread}).
+
+@kindex f @r{(repo)}
+@item f
+Browse the feed of the author at point (@code{ssb-browse-author-feed}).
+
+@kindex n @r{(repo)}
+@kindex p @r{(repo)}
+@item n
+@itemx p
+Move to the next or previous push (@code{ssb-git-next-item},
+@code{ssb-git-prev-item}).
+@findex ssb-git-next-item
+@findex ssb-git-prev-item
+
+@kindex g @r{(repo)}
+@item g
+Refresh.
+@end table
+
+@node Cloning
+@section Cloning
+
+@deffn Command ssb-git-clone dir
+Clone this repo into @var{dir}, which defaults to the repo's name.  Git
+runs in the background, its output in the @file{*ssb-git output*}
+buffer, which is shown if it fails.
+@end deffn
+
+A clone is an ordinary git clone with @code{origin} set to the repo's
+@code{ssb://} URL; push to it as you would to any remote.
+
+@node Issues and Pull Requests
+@chapter Issues and Pull Requests
+
+An issue and a pull request are the same kind of thing on SSB: a message
+naming a repo, with a title and text, whose comments are ordinary posts
+replying to it.  So comments made here show up in any SSB client, as
+replies in your feed.  A pull request also names a branch of some repo
+(often a fork) that it asks to have merged into a branch of this one.
+
+@menu
+* Issue Lists::                 A repo's issues or pull requests.
+* An Issue::                    Its text, changes and comments.
+* Closing and Reopening::       Changing an issue's state.
+* Checking Out a Pull Request:: Its branch, in a clone of yours.
+@end menu
+
+@node Issue Lists
+@section Issue Lists
+
+@kbd{i} and @kbd{P} in a repo buffer list its open issues or pull
+requests, newest first.
+
+@table @kbd
+@kindex RET @r{(issue list)}
+@item RET
+Open the issue or pull request at point (@code{ssb-git-open-issue}).
+@findex ssb-git-open-issue
+
+@kindex s @r{(issue list)}
+@item s
+Show open, then closed, then all (@code{ssb-git-issues-cycle-state}).
+@findex ssb-git-issues-cycle-state
+
+@kindex N @r{(issue list)}
+@item N
+File a new issue against the repo (@code{ssb-git-new-issue}).
+
+@kindex g @r{(issue list)}
+@item g
+Refresh.
+@end table
+
+@node An Issue
+@section An Issue
+
+@deffn Command ssb-git-issue id
+Show issue or pull request @var{id}, a message id.  Also what @kbd{RET}
+opens from an issue list.
+@end deffn
+
+An issue buffer shows its title, its state (open, closed, or for a pull
+request merged), who filed it and on which repo, and for a pull request
+the branch it wants merged and where.  Then its text; every change
+anyone has published to its state or title, marked ``not counted'' when
+it does not count (@pxref{Whose Word Counts}); and its comments, replies
+to a comment indented beneath it.
+
+@table @kbd
+@kindex r @r{(issue)}
+@item r
+Comment (@code{ssb-git-comment}).  @xref{Composing}.
+@findex ssb-git-comment
+
+@kindex x @r{(issue)}
+@item x
+Close it if open, reopen it if closed (@code{ssb-git-toggle-open}).
+@xref{Closing and Reopening}.
+
+@kindex o @r{(issue)}
+@item o
+Check out a pull request's branch (@code{ssb-git-checkout-pull-request}).
+@xref{Checking Out a Pull Request}.
+
+@kindex t @r{(issue)}
+@item t
+Open the comment thread in maxbutt's thread view (@code{ssb-git-thread}),
+with all of maxbutt's thread commands.
+@findex ssb-git-thread
+
+@kindex f @r{(issue)}
+@item f
+Browse the feed of the author at point (@code{ssb-browse-author-feed}).
+
+@kindex n @r{(issue)}
+@kindex p @r{(issue)}
+@item n
+@itemx p
+Move to the next or previous comment or change.
+
+@kindex g @r{(issue)}
+@item g
+Refresh.
+@end table
+
+@node Closing and Reopening
+@section Closing and Reopening
+
+@deffn Command ssb-git-toggle-open
+Close this issue or pull request if it is open, reopen it if it is
+closed, after asking.  This publishes an @code{issue-edit} message from
+your feed, which cannot be taken back; reopening is a new message, not
+an undo.
+@end deffn
+
+Anyone can publish a close, but it counts only from the issue's author
+or the repo's owner.  If you are neither, yours is published and shown
+as not counted.  @xref{Whose Word Counts}.
+
+@node Checking Out a Pull Request
+@section Checking Out a Pull Request
+
+@deffn Command ssb-git-checkout-pull-request dir
+Fetch this pull request's branch from the repo it names into the clone
+in @var{dir}, as the branch @code{pr/@var{id}} (the first characters of
+the pull request's id), and check it out.  @var{dir} defaults to the
+clone you are in.
+@end deffn
+
+Review it, merge it with git as you like, and push.  A push that brings
+the pull request's branch tip into the repo's @code{HEAD} branch marks
+it merged, as git-ssb's did; like any change of state, that counts when
+the pusher is the repo's owner or the pull request's author.
+
+@node Composing
+@chapter Composing
+
+New issues, pull requests and comments are written in the
+@file{*ssb-git compose*} buffer, in @code{markdown-mode} if you have it.
+The shaded lines at the top say what you are writing and are not sent.
+
+For an issue or a pull request, the first line is the title; then a
+blank line, then the text.  The title is also put at the top of the
+text, so clients that know nothing of git, such as Silkpurse or Patchwork,
+show it.  A comment has no title.
+
+@table @kbd
+@kindex C-c C-c @r{(compose)}
+@item C-c C-c
+Publish (@code{ssb-git-compose-send}).  Publishing cannot be undone.
+@findex ssb-git-compose-send
+
+@kindex C-c C-k @r{(compose)}
+@item C-c C-k
+Discard, after asking (@code{ssb-git-compose-cancel}).
+@findex ssb-git-compose-cancel
+@end table
+
+@deffn Command ssb-git-new-pull-request head-repo head-branch branch
+Ask for @var{head-branch} of @var{head-repo} to be merged into this
+repo's @var{branch}.  @var{head-repo} defaults to this repo, and
+@var{branch} to its @code{HEAD}.  Push the branch first: a pull request
+names a branch its readers can already fetch.
+@end deffn
+
+@node Whose Word Counts
+@chapter Whose Word Counts
+
+On SSB nobody can stop anyone publishing anything, so who may do what is
+decided by the reader.  ssb_git's rules:
+
+@table @asis
+@item An issue's state
+Changes count from the issue's author and from the repo's owner (the
+author of its @code{git-repo} message); among those, the latest wins.
+Others' are kept and shown, marked ``not counted''.
+
+@item A repo's name
+Its author's latest @code{about} name for it, else the name in its
+@code{git-repo} message.  Names anyone else gave it are kept: they are
+shown dimmed for a repo its author never named, and listed in the repo
+buffer.
+
+@item A push closing issues
+A commit added to the repo's @code{HEAD} branch whose message says
+@samp{close}, @samp{closes}, @samp{closed}, @samp{closing}, @samp{fix},
+@samp{fixes}, @samp{fixed} or @samp{fixing}, optionally @samp{issue},
+then an issue's id, closes that issue.  Whether it counts follows the
+rule for any state change: so a push by the repo's owner or the issue's
+author.
+
+@item Branches
+Anyone can push.  When pushes conflict, one value becomes the plain
+branch and the others conflict branches (@pxref{A Repo}), as git-ssb
+decided it.
+@end table
+
+@node Customization
+@chapter Customization
+
+@defopt ssb-git-bin-directory
+@vindex ssb-git-bin-directory
+The directory holding @command{git-remote-ssb}, put first on @env{PATH}
+for the git ssb-git runs (a clone, a pull request checkout).  By default
+the plugin's @file{bin/}, beside the @file{elisp/} this file was loaded
+from.  @code{nil} leaves @env{PATH} alone.  @xref{Finding
+git-remote-ssb}.
+@end defopt
+
+@defopt ssb-node
+@vindex ssb-node
+maxbutt's: the Erlang node name of the erlbutt node, as a symbol.
+ssb-git talks to the same node.  If maxbutt commands work and ssb-git's
+say the plugin is not running, check the plugin on that node.
+@end defopt
+
+@node Key Index
+@unnumbered Key Index
+
+@printindex ky
+
+@node Command Index
+@unnumbered Command Index
+
+@printindex fn
+
+@node Variable Index
+@unnumbered Variable Index
+
+@printindex vr
+
+@bye

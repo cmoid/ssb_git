@@ -38,6 +38,8 @@
 ;;   t  the comment thread in maxbutt's thread view   f  author's feed
 ;;
 ;; Compose buffers send with C-c C-c and cancel with C-c C-k.
+;;
+;; The manual: C-h i, then ssb-git.
 
 ;;; Code:
 
@@ -59,6 +61,17 @@ from, so a clone works even when Emacs's PATH (on macOS, launchd's, not
 the shell's) does not have the commands on it.  nil leaves PATH alone."
   :type '(choice (const :tag "PATH as it is" nil) directory)
   :group 'ssb-git)
+
+;; The manual (C-h i, or M-x info-display-manual RET ssb-git) ships in
+;; the plugin's info/, beside this file's elisp/.
+(defvar Info-directory-list)
+(declare-function info-initialize "info" ())
+(when load-file-name
+  (let ((info (expand-file-name "../info" (file-name-directory load-file-name))))
+    (when (file-exists-p (expand-file-name "dir" info))
+      (with-eval-after-load 'info
+        (info-initialize)
+        (add-to-list 'Info-directory-list info t)))))
 
 ;;; Terms from the node
 
