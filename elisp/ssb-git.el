@@ -112,8 +112,30 @@ erlext decodes binaries as UTF-8 (maxbutt since its UTF-8 fix)."
   (or (ssb-git--str (ssb-git--get map 'title)) "(untitled)"))
 
 (defun ssb-git--repo-label (map)
-  "A repo's name, else its short id."
-  (or (ssb-git--str (ssb-git--get map 'name)) (ssb--short-id (ssb-git--get map 'id))))
+  "A repo's name; else, dimmed, a name someone else gave it; else its short id.
+Only the repo's author's names count (see `ssb-git--insert-names')."
+  (or (ssb-git--str (ssb-git--get map 'name))
+      (when-let* ((other (ssb-git--str (ssb-git--get map 'other_name))))
+        (propertize other 'face 'shadow))
+      (ssb--short-id (ssb-git--get map 'id))))
+
+(defun ssb-git--insert-names (r)
+  "Insert every name repo R has been given, if any is not its current one."
+  (let ((names (ssb-git--get r 'names))
+        (current (ssb-git--str (ssb-git--get r 'name))))
+    (when (seq-some (lambda (n) (not (equal (ssb-git--str (ssb-git--get n 'name)) current)))
+                    names)
+      (insert "named\n")
+      (dolist (n names)
+        (let ((s (point)))
+          (insert (format "  %s  %-24s by %s%s\n"
+                          (ssb-git--date (ssb-git--get n 'ts))
+                          (truncate-string-to-width (ssb-git--str (ssb-git--get n 'name)) 24)
+                          (ssb-git--who n)
+                          (if (ssb-git--true (ssb-git--get n 'counted)) ""
+                            (propertize "   (not counted: not the repo's author)"
+                                        'face 'shadow))))
+          (put-text-property s (point) 'ssb-author (ssb-git--get n 'author)))))))
 
 (defmacro ssb-git--with-buffer (name mode &rest body)
   "Erase buffer NAME, run BODY in it, switch to MODE, and show it."
@@ -220,6 +242,7 @@ ID is a git-repo message id, with or without the ssb:// prefix."
       (ssb-git--insert-author r (format "created %s by " (ssb-git--date (ssb-git--get r 'created))))
       (when-let* ((up (ssb-git--get r 'upstream)))
         (insert "fork of " (ssb-git--url up) "\n"))
+      (ssb-git--insert-names r)
       (insert (format "%d open issues, %d open pull requests\n\n"
                       (or (ssb-git--get r 'open_issues) 0)
                       (or (ssb-git--get r 'open_prs) 0)))

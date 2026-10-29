@@ -48,6 +48,12 @@ git push origin master
 published if it is not in a git repository or the remote name is taken.
 The repo is just that message. Its branches arrive with the first push.
 
+A repo is renamed, as in git-ssb, by an `about` message naming it, which
+`git ssb name <name>` publishes for the repo `origin` points at. A repo's
+name is the latest one its author gave it. Anyone can publish a name for
+anyone's repo; those are kept, and shown dimmed, or in brackets in
+`git ssb repos`, only for a repo its author never named.
+
 Fetch and push go through the local erlbutt node, never the network
 directly. A clone is read from the packs the node already holds; any it
 lacks are asked of its peers, and the fetch waits for them for a time. A
@@ -59,6 +65,8 @@ Commands git has no word for are under `git ssb`:
 ```
 git ssb create <name> [--remote <remote>]
                                 publish a new repo and print its URL
+git ssb name <name> [--remote <remote>]
+                                rename your repo (default remote: origin)
 git ssb repos                   every repo the node knows, oldest first
 git ssb repos --mine            the repos you created
 git ssb repos --author <feed>   the repos one feed created
@@ -93,7 +101,9 @@ Emacs's PATH is; `ssb-git-bin-directory` overrides that.
 | issues, pull requests | `i`, `P` | `RET` open · `s` open/closed/all · `N` new |
 | an issue or pull request | `RET` on one, or `M-x ssb-git-issue` | `r` comment · `x` close/reopen · `o` check out the pull request · `t` thread view · `f` author's feed |
 
-An issue buffer shows the text, every change anyone has published to its
+A repo buffer lists every name the repo has been given, when one differs
+from its current name, marking those that are not its author's. An
+issue buffer shows the text, every change anyone has published to its
 state (marked when it does not count; see below), and its comments.
 Checking out a pull request fetches its branch from the head repo into a
 clone of yours as `pr/<id>` and switches to it. Compose buffers send with
@@ -171,7 +181,7 @@ All are owner-only.
 
 | method | type | returns |
 |---|---|---|
-| `git.repos({author?})` | source | repos, oldest first: `{id, author, name?, upstream?, ts}` |
+| `git.repos({author?})` | source | repos, oldest first: `{id, author, name?, upstream?, ts, other_name?}` |
 | `git.refs({repo})` | async | `{head, refs: [{name, hash}]}`, a fork inheriting its upstream's refs |
 | `git.packs({repo})` | async | `[{update, pack, idx?, size?, chunks?}]`, oldest first |
 | `git.updates({repo})` | async | `[{key, links, refs}]`, the repo's update graph |
@@ -225,8 +235,6 @@ ln -s <release>/plugins/ssb_git/bin/git-remote-ssb ~/.local/bin/git-remote-ssb
 ## Limitations
 
 - Private repos (git-ssb's `recps`) are not supported.
-- Repo names come only from the `git-repo` message; renames published
-  later as `about` messages are not shown.
 - 22 of the earliest updates on the network stored each object as its
   own blob rather than in a pack; they are not read.
 - A plugin cannot be unloaded from a running node; removing it takes a

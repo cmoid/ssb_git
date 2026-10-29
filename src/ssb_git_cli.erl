@@ -61,6 +61,11 @@ git_ssb(["create" | Rest]) ->
         {ok, Name, Remote} -> cmd_create(Name, Remote);
         error              -> usage(), 2
     end;
+git_ssb(["name" | Rest]) ->
+    case name_opts(Rest) of
+        {ok, Name, Remote} -> cmd_name(Name, Remote);
+        error              -> usage(), 2
+    end;
 git_ssb(["dump", File]) ->
     cmd_dump(File);
 git_ssb(["version"]) ->
@@ -81,6 +86,12 @@ create_opts([Name])                   -> {ok, Name, none};
 create_opts([Name, "--remote", Remote]) -> {ok, Name, Remote};
 create_opts(["--remote", Remote, Name]) -> {ok, Name, Remote};
 create_opts(_)                        -> error.
+
+name_opts(Args) ->
+    case create_opts(Args) of
+        {ok, Name, none} -> {ok, Name, "origin"};
+        Other            -> Other
+    end.
 
 %% Publish a git-repo message — {type: git-repo, name} — and print its
 %% URL.  The message id is the repo: there is nothing else to create, and
@@ -140,6 +151,55 @@ add_remote(Remote, Url) ->
             1
     end.
 
+%% Rename the repo a remote points at: {type: about, about: <repo>, name},
+%% as git-ssb did.  Anyone may publish one about anyone's repo, but only
+%% the repo's author's count (ssb_git_repos), so a name for someone else's
+%% repo is refused rather than published to no effect.
+cmd_name("", _Remote) ->
+    io:format(standard_error, "git ssb name: the name is empty~n", []),
+    2;
+cmd_name(Name, Remote) ->
+    Repo = case ssb_git_local:git_quiet(["remote", "get-url", Remote]) of
+               {0, Url} -> ssb_git_remote:parse_url(string:trim(Url));
+               _        -> {error, io_lib:format("no remote ~s here", [Remote])}
+           end,
+    case Repo of
+        {ok, Id} ->
+            {ok, Peer} = ssb_git_client:connect(),
+            Me = keys:pub_key_disp(),
+            Mine = case ssb_git_client:stream(Peer, [~"git", ~"repos"],
+                                              [{[{~"author", Me}]}]) of
+                       {ok, Rs} -> [maps:get(~"id", R) || R <- Rs];
+                       _        -> []
+                   end,
+            case lists:member(Id, Mine) of
+                false ->
+                    io:format(standard_error,
+                              "git ssb name: ~s is not your repo; only its "
+                              "author's names count~n", [Id]),
+                    1;
+                true ->
+                    Content = {[{~"type", ~"about"}, {~"about", Id},
+                                {~"name", unicode:characters_to_binary(Name)}]},
+                    case ssb_git_client:call(Peer, [~"publish"], [Content]) of
+                        {ok, _} ->
+                            io:format(standard_error, "named ssb://~s ~ts~n",
+                                      [Id, unicode:characters_to_binary(Name)]),
+                            0;
+                        {error, Reason} ->
+                            io:format(standard_error, "git ssb name: ~p~n", [Reason]),
+                            1
+                    end
+            end;
+        error ->
+            io:format(standard_error,
+                      "git ssb name: remote ~s is not an ssb:// repo~n", [Remote]),
+            1;
+        {error, Why} ->
+            io:format(standard_error, "git ssb name: ~s~n", [Why]),
+            1
+    end.
+
 cmd_repos(Opts) ->
     {ok, Peer} = ssb_git_client:connect(),
     Args = case maps:get(author, Opts, undefined) of
@@ -149,14 +209,19 @@ cmd_repos(Opts) ->
            end,
     case ssb_git_client:stream(Peer, [~"git", ~"repos"], Args) of
         {ok, Repos} ->
-            [io:format("ssb://~s  ~s~n",
-                       [maps:get(~"id", R), maps:get(~"name", R, ~"")])
+            [io:format("ssb://~s  ~ts~n", [maps:get(~"id", R), repo_label(R)])
              || R <- Repos],
             0;
         {error, Reason} ->
             io:format(standard_error, "git ssb repos: ~p~n", [Reason]),
             1
     end.
+
+%% Its author's name for it; else, in brackets, the latest name anyone
+%% else gave it.
+repo_label(#{~"name" := Name})        -> Name;
+repo_label(#{~"other_name" := Other}) -> [$[, Other, $]];
+repo_label(_)                         -> "".
 
 %% Every git-repo and git-update message the node holds, one stored message
 %% per line, as the node sends them — the input to tools/fold-diff.
@@ -187,6 +252,7 @@ usage() ->
               "usage: git ssb <command>~n~n"
               "  create <name> [--remote <remote>]  publish a new repo; print its URL,~n"
               "                                     and add it as a remote here~n"
+              "  name <name> [--remote <remote>]    rename your repo (default: origin)~n"
               "  repos [--mine | --author <feed>]   list known repos~n"
               "  dump <file>                        every git message, for tools/fold-diff~n"
               "  version~n"
@@ -216,5 +282,15 @@ create_opts_test_() ->
      ?_assertEqual(error, create_opts([])),
      ?_assertEqual(error, create_opts(["foo", "bar"])),
      ?_assertEqual(error, create_opts(["foo", "--remote"]))].
+
+name_opts_test_() ->
+    [?_assertEqual({ok, "foo", "origin"}, name_opts(["foo"])),
+     ?_assertEqual({ok, "foo", "up"}, name_opts(["foo", "--remote", "up"])),
+     ?_assertEqual(error, name_opts([]))].
+
+repo_label_test_() ->
+    [?_assertEqual(~"a", repo_label(#{~"name" => ~"a", ~"other_name" => ~"b"})),
+     ?_assertEqual(~"[b]", iolist_to_binary(repo_label(#{~"other_name" => ~"b"}))),
+     ?_assertEqual("", repo_label(#{}))].
 
 -endif.

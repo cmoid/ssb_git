@@ -31,7 +31,7 @@
 %% git then checks the fetched refs are connected, as after any fetch.
 -module(ssb_git_remote).
 
--export([main/1]).
+-export([main/1, parse_url/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

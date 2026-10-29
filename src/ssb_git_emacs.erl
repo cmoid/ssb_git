@@ -30,12 +30,15 @@
 %%%===================================================================
 
 %% Every repo the node knows, most recently pushed (or created) first.
-%% Which: all | mine.
+%% Which: all | mine.  name is the one its author gave it; other_name the
+%% latest anyone else did (ssb_git_repos).
 repos(Which) ->
     Rows = case Which of
-               mine -> q("SELECT id, author, name, upstream, ts FROM git_repo"
-                         " WHERE author=?1", [keys:pub_key_disp()]);
-               _    -> q("SELECT id, author, name, upstream, ts FROM git_repo", [])
+               mine -> q("SELECT id, author, name, upstream, ts, other_name"
+                         " FROM git_repo_named WHERE author=?1",
+                         [keys:pub_key_disp()]);
+               _    -> q("SELECT id, author, name, upstream, ts, other_name"
+                         " FROM git_repo_named", [])
            end,
     Pushed = maps:from_list(
                [{R, T} || [R, T] <- q("SELECT repo, max(ts) FROM git_object"
@@ -43,28 +46,33 @@ repos(Which) ->
     Open = ssb_git_issues:open_counts(),
     Repos = [begin
                  {OI, OP} = maps:get(Id, Open, {0, 0}),
-                 #{id => Id, name => absent(Name), author => Author,
+                 #{id => Id, name => absent(Name), other_name => absent(Other),
+                   author => Author,
                    author_name => name(Author), upstream => absent(Up),
                    created => Ts, pushed => maps:get(Id, Pushed, nil),
                    open_issues => OI, open_prs => OP}
-             end || [Id, Author, Name, Up, Ts] <- Rows],
+             end || [Id, Author, Name, Up, Ts, Other] <- Rows],
     lists:sort(fun(A, B) -> activity(A) >= activity(B) end, Repos).
 
 activity(#{pushed := nil, created := C}) -> C;
 activity(#{pushed := P})                 -> P.
 
-%% One repo: who made it, its branches (conflict branches marked with the
-%% plain name they compete for), and its recent pushes, newest first,
+%% One repo: who made it, every name it has been given (the author's
+%% marked counted), its branches (conflict branches marked with the plain
+%% name they compete for), and its recent pushes, newest first,
 %% summarised from their own messages so nothing is fetched.
 repo(Id) when is_binary(Id) ->
-    case q("SELECT author, name, upstream, ts FROM git_repo WHERE id=?1", [Id]) of
-        [[Author, Name, Up, Ts]] ->
+    case q("SELECT author, name, upstream, ts, other_name FROM git_repo_named"
+           " WHERE id=?1", [Id]) of
+        [[Author, Name, Up, Ts, Other]] ->
             {Head, Refs} = case ssb_git_refs:repo_refs(Id) of
                                {ok, #{head := H, refs := Rs}} -> {H, Rs};
                                _                              -> {nil, []}
                            end,
             {OI, OP} = maps:get(Id, ssb_git_issues:open_counts(), {0, 0}),
-            {ok, #{id => Id, name => absent(Name), author => Author,
+            {ok, #{id => Id, name => absent(Name), other_name => absent(Other),
+                   names => names(Id, Author),
+                   author => Author,
                    author_name => name(Author), upstream => absent(Up),
                    created => Ts, head => absent(Head),
                    refs => [#{name => N, hash => H,
@@ -79,6 +87,13 @@ repo(Id) when is_binary(Id) ->
     end;
 repo(_) ->
     {error, not_found}.
+
+%% The about names of Repo, newest first.
+names(Repo, Owner) ->
+    [#{name => N, author => A, author_name => name(A), ts => Ts,
+       counted => A =:= Owner}
+     || [N, A, Ts] <- q("SELECT name, author, ts FROM git_repo_name"
+                        " WHERE repo=?1 ORDER BY ts DESC", [Repo])].
 
 recent_updates(Repo) ->
     [U || [Key, _] <- q("SELECT id, ts FROM git_object WHERE repo=?1 AND kind=1"

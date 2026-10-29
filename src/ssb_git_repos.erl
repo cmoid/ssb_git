@@ -7,12 +7,19 @@
 %% message id is the repo's identity and its clone URL (ssb://%id).  A fork
 %% is a git-repo whose `upstream` names the repo it was forked from.
 %%
-%% An ssb_view over ssb_store — a row per repo — plus an ssb_plugin:
+%% A repo is renamed, as git-ssb did it, by an `about` message:
+%% {type: about, about: <repo id>, name}.  The repo's author's latest one
+%% is its name, falling back to the git-repo message's; latest by the
+%% author's own sequence, never by a claimed timestamp.  Anyone may name
+%% anyone's repo, and those names are kept: other_name is the most recent
+%% of them, which a reader can show, marked, for a repo whose author never
+%% named it (31 repos on the network in October 2026).
+%%
+%% An ssb_view over ssb_store — git_repo, a row per repo, and
+%% git_repo_name, a row per (repo, namer) — plus an ssb_plugin:
 %%   git.repos({author?})   source -> repos, oldest first
 %%
-%% This is the first table of the ssb_git view (erlbutt
-%% doc/research/git-over-ssb.md, "The ssb_git app"); pushes, refs and packs
-%% come next, in their own tables.
+%% Readers take names from git_repo_named, an SQL view over the two.
 %%
 %% Private repos (git-repo with recps) arrive as encrypted content with no
 %% visible type and are not indexed.
@@ -34,7 +41,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_continue/2,
          handle_info/2, terminate/2, code_change/3]).
 
--define(SCHEMA_VERSION, 1).
+-define(SCHEMA_VERSION, 2).
 -define(DDL,
         ["CREATE TABLE IF NOT EXISTS git_repo("
          "  id       TEXT PRIMARY KEY,"
@@ -43,7 +50,24 @@
          "  upstream TEXT,"
          "  ts       INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;",
          "CREATE INDEX IF NOT EXISTS ix_git_repo_author"
-         "  ON git_repo(author, ts);"]).
+         "  ON git_repo(author, ts);",
+         %% Every message id anyone has named, not only known repos: an
+         %% about can arrive before the git-repo it names.
+         "CREATE TABLE IF NOT EXISTS git_repo_name("
+         "  repo   TEXT NOT NULL,"
+         "  author TEXT NOT NULL,"
+         "  name   TEXT NOT NULL,"
+         "  seq    INTEGER NOT NULL,"
+         "  ts     INTEGER NOT NULL DEFAULT 0,"
+         "  PRIMARY KEY (repo, author)) WITHOUT ROWID;",
+         "CREATE VIEW IF NOT EXISTS git_repo_named AS"
+         "  SELECT r.id, r.author, COALESCE(n.name, r.name) AS name,"
+         "         r.upstream, r.ts,"
+         "         (SELECT o.name FROM git_repo_name o"
+         "           WHERE o.repo = r.id AND o.author <> r.author"
+         "           ORDER BY o.ts DESC LIMIT 1) AS other_name"
+         "  FROM git_repo r"
+         "  LEFT JOIN git_repo_name n ON n.repo = r.id AND n.author = r.author;"]).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -52,7 +76,8 @@ start_link() ->
 %%% ssb_view callbacks (run in the view_manager process)
 %%%===================================================================
 
-view_version() -> 1.
+%% 2: about names (git_repo_name).
+view_version() -> 2.
 
 view_load() ->
     case ssb_store:complete(?MODULE) of
@@ -63,6 +88,7 @@ view_load() ->
 view_reset() ->
     _ = ssb_store:clear_complete(?MODULE),
     _ = ssb_store:exec("DELETE FROM git_repo;"),
+    _ = ssb_store:exec("DELETE FROM git_repo_name;"),
     ok.
 
 view_save() ->
@@ -70,17 +96,27 @@ view_save() ->
     ok.
 
 %% A repo row is written once and never changes: a git-repo message is
-%% the whole of the repo's identity, and renames are not part of git-ssb.
-%% Redelivery is harmless (DO NOTHING on the primary key).
+%% the whole of the repo's identity.  Redelivery is harmless (DO NOTHING
+%% on the primary key).  A name row is replaced only by a later message
+%% in the same feed, so redelivery and out-of-order delivery are too.
 view_entry(#message{} = Msg) ->
-    case repo_row(Msg) of
-        {ok, Row} ->
+    case {repo_row(Msg), name_row(Msg)} of
+        {{ok, Row}, _} ->
             catch ssb_store:write("INSERT INTO git_repo"
                                   "(id, author, name, upstream, ts)"
                                   " VALUES(?1, ?2, ?3, ?4, ?5)"
                                   " ON CONFLICT(id) DO NOTHING", Row),
             ok;
-        skip ->
+        {_, {ok, Row}} ->
+            catch ssb_store:write("INSERT INTO git_repo_name"
+                                  "(repo, author, name, seq, ts)"
+                                  " VALUES(?1, ?2, ?3, ?4, ?5)"
+                                  " ON CONFLICT(repo, author) DO UPDATE SET"
+                                  " name = excluded.name, seq = excluded.seq,"
+                                  " ts = excluded.ts"
+                                  " WHERE excluded.seq > git_repo_name.seq", Row),
+            ok;
+        _ ->
             ok
     end;
 view_entry(_) ->
@@ -151,6 +187,21 @@ repo_row(#message{id = Id, author = Author, timestamp = Ts,
 repo_row(_) ->
     skip.
 
+%% [Repo, Author, Name, Seq, Ts] for an about message naming a message id,
+%% skip otherwise.  An empty name is not a rename.
+name_row(#message{author = Author, sequence = Seq, timestamp = Ts,
+                  received = Recv, content = {Props}})
+  when is_binary(Author), is_integer(Seq) ->
+    case {?pgv(~"type", Props), msg_id_or_null(?pgv(~"about", Props)),
+          text_or_null(?pgv(~"name", Props))} of
+        {~"about", Repo, Name} when is_binary(Repo), is_binary(Name) ->
+            {ok, [Repo, Author, Name, Seq, sort_ts(Ts, Recv)]};
+        _ ->
+            skip
+    end;
+name_row(_) ->
+    skip.
+
 text_or_null(B) when is_binary(B), B =/= <<>> -> B;
 text_or_null(_)                                -> null.
 
@@ -177,18 +228,19 @@ num_or_undefined(N) when is_float(N)   -> trunc(N);
 num_or_undefined(_)                    -> undefined.
 
 repos(Author) when is_binary(Author) ->
-    rows("SELECT id, author, name, upstream, ts FROM git_repo"
+    rows("SELECT id, author, name, upstream, ts, other_name FROM git_repo_named"
          " WHERE author=?1 ORDER BY ts", [Author]);
 repos(_) ->
-    rows("SELECT id, author, name, upstream, ts FROM git_repo"
+    rows("SELECT id, author, name, upstream, ts, other_name FROM git_repo_named"
          " ORDER BY ts", []).
 
 %% Absent fields are omitted rather than sent as null.
-repo_json([Id, Author, Name, Upstream, Ts]) ->
+repo_json([Id, Author, Name, Upstream, Ts, Other]) ->
     {[{~"id", Id}, {~"author", Author}]
      ++ [{~"name", Name} || is_binary(Name)]
      ++ [{~"upstream", Upstream} || is_binary(Upstream)]
-     ++ [{~"ts", Ts}]}.
+     ++ [{~"ts", Ts}]
+     ++ [{~"other_name", Other} || is_binary(Other)]}.
 
 rows(Sql, Params) ->
     try ssb_store:q(Sql, Params) of
@@ -234,9 +286,24 @@ sort_ts_test_() ->
      ?_assertEqual(2000, sort_ts(2000.7, undefined)),
      ?_assertEqual(0,    sort_ts(~"yesterday", null))].
 
+name_row_test_() ->
+    About = fun(Props) ->
+                    #message{id = ~"%other", author = ?AUTHOR, sequence = 7,
+                             timestamp = 2000, received = 3000,
+                             content = {[{~"type", ~"about"} | Props]}}
+            end,
+    [?_assertEqual({ok, [?REPO_ID, ?AUTHOR, ~"git-ssb", 7, 2000]},
+                   name_row(About([{~"about", ?REPO_ID}, {~"name", ~"git-ssb"}]))),
+     %% a feed's about (a profile name), an empty name, a missing one: skipped
+     ?_assertEqual(skip, name_row(About([{~"about", ?AUTHOR}, {~"name", ~"x"}]))),
+     ?_assertEqual(skip, name_row(About([{~"about", ?REPO_ID}, {~"name", ~""}]))),
+     ?_assertEqual(skip, name_row(About([{~"about", ?REPO_ID},
+                                          {~"image", ~"&x.sha256"}]))),
+     ?_assertEqual(skip, name_row(msg({[{~"type", ~"git-repo"}]})))].
+
 repo_json_test() ->
     ?assertEqual({[{~"id", ?REPO_ID}, {~"author", ?AUTHOR},
-                   {~"name", ~"x"}, {~"ts", 5}]},
-                 repo_json([?REPO_ID, ?AUTHOR, ~"x", null, 5])).
+                   {~"name", ~"x"}, {~"ts", 5}, {~"other_name", ~"y"}]},
+                 repo_json([?REPO_ID, ?AUTHOR, ~"x", null, 5, ~"y"])).
 
 -endif.
