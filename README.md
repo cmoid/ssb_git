@@ -82,6 +82,10 @@ outside ASCII are garbled in both directions.
 (require 'ssb-git)
 ```
 
+The git it runs (a clone, a pull request checkout) finds `git-remote-ssb`
+in the plugin's `bin/`, beside the `elisp/` it was loaded from, whatever
+Emacs's PATH is; `ssb-git-bin-directory` overrides that.
+
 | buffer | opened by | keys |
 |---|---|---|
 | repos | `M-x ssb-git-repos` (`C-u` for yours) | `RET` open · `m` yours/all · `g` refresh |

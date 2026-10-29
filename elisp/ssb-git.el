@@ -49,6 +49,17 @@
   "Git repositories, issues and pull requests on SSB."
   :group 'maxbutt)
 
+(defcustom ssb-git-bin-directory
+  (when load-file-name
+    (let ((bin (expand-file-name "../bin" (file-name-directory load-file-name))))
+      (and (file-directory-p bin) bin)))
+  "Directory holding git-remote-ssb, put first on PATH for the git runs here.
+By default the plugin's bin/, beside the elisp/ this file was loaded
+from, so a clone works even when Emacs's PATH (on macOS, launchd's, not
+the shell's) does not have the commands on it.  nil leaves PATH alone."
+  :type '(choice (const :tag "PATH as it is" nil) directory)
+  :group 'ssb-git)
+
 ;;; Terms from the node
 
 (defun ssb-git--get (map key)
@@ -293,7 +304,13 @@ ID is a git-repo message id, with or without the ssb:// prefix."
 (defun ssb-git--run-git (args dir done &optional then)
   "Run git with ARGS in DIR, output in *ssb-git output*; say DONE, run THEN."
   (let* ((buf (get-buffer-create "*ssb-git output*"))
-         (default-directory dir))
+         (default-directory dir)
+         (process-environment
+          (if ssb-git-bin-directory
+              (cons (concat "PATH=" (expand-file-name ssb-git-bin-directory)
+                            path-separator (or (getenv "PATH") ""))
+                    process-environment)
+            process-environment)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (goto-char (point-max))
